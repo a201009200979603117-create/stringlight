@@ -27,9 +27,11 @@
         bad: 0.18,
         drag: 0.12,
         flick: 0.15,
-        // 長押尾判：只分「完成」或 Miss
-        holdGrace: 0.05,   // 手指短暫離開判定範圍的容許時間
-        holdTail: 0.25     // 最後這個比例的長度不用按，期間放手也算完成
+        // 長押（參考常見音遊的寬鬆做法）
+        holdGrace: 0.2,    // 中途短暫放開或換手：0.2 秒內再按回來就不算斷
+        holdReach: 1.6,    // 按住期間判定範圍放寬的倍數，光弦移動時手指不用貼得那麼準
+        holdTail: 1 / 3,   // 最後 1/3 的長度不用按，期間放手也算完成
+        holdTailMin: 0.2   // 短的長押至少也有最後 0.2 秒可以放手
     };
     // 開場與結尾：判定線從中間展開／收回
     const OPEN_LINE = 1.0;     // 展開所需秒數；展開完成前不顯示任何音符
@@ -340,13 +342,13 @@
         }
 
         // 觸控點是否在音符的判定範圍內（沿著判定線的方向比較）
-        inRange(n, x, y) {
+        inRange(n, x, y, scale) {
             const l = n.line;
             const v = this.view;
             const along = (x - l.cx) * l.cos + (y - l.cy) * l.sin;
             const target = n.pos * v.sw;
             // 判定範圍固定，「音符大小」只影響外觀
-            return Math.abs(along - target) <= v.sw * 0.09;
+            return Math.abs(along - target) <= v.sw * 0.09 * (scale || 1);
         }
 
         perpDistance(n, x, y) {
@@ -418,9 +420,9 @@
             this.taps.length = 0;
         }
 
-        touchInRange(n) {
+        touchInRange(n, scale) {
             for (const tc of this.touches.values()) {
-                if (this.inRange(n, tc.x, tc.y)) return tc;
+                if (this.inRange(n, tc.x, tc.y, scale)) return tc;
             }
             return null;
         }
@@ -493,14 +495,19 @@
                         if (n.state === PENDING) {
                             if (t - n.t > WIN.good) this.miss(n);
                         } else {
-                            if (this.touchInRange(n)) n.lastHeld = t;
+                            // 任何一根手指在範圍內都算按著（可以換手）
+                            const touching = this.touchInRange(n, WIN.holdReach);
+                            if (touching) n.lastHeld = t;
+                            const freeFrom = n.end - Math.max((n.end - n.t) * WIN.holdTail, WIN.holdTailMin);
                             if (t >= n.end) {
                                 this.finishHold(n);
+                            } else if (!touching && n.lastHeld >= freeFrom) {
+                                // 已經按到可以放手的最後一段：放開立刻算完成
+                                this.finishHold(n);
                             } else if (t - n.lastHeld > WIN.holdGrace) {
-                                // 放手：已經按到最後 1/4 就算完成，否則 Miss
-                                if (n.lastHeld >= n.end - (n.end - n.t) * WIN.holdTail) this.finishHold(n);
-                                else this.miss(n);
-                            } else {
+                                // 太早放開，而且沒有在 0.2 秒內按回來
+                                this.miss(n);
+                            } else if (touching) {
                                 this.holdSpark(n, t);
                             }
                         }
@@ -511,7 +518,8 @@
         }
 
         // 長押：按下時（頭判）決定 Perfect 或 Good，沒有 Bad；
-        // 尾判只有 Perfect 或 Miss：按過長度的 3/4 就算完成（最後 1/4 可以放手），更早放開就是 Miss。
+        // 尾判只有 Perfect 或 Miss：最後 1/3（至少 0.2 秒）可以放手；中途短暫放開或換手，
+        // 0.2 秒內按回來都沒關係；按住期間判定範圍放寬為 1.6 倍。更早放開而且沒按回來才是 Miss。
         // 完成時以頭判的結果計分，尾端顯示 Perfect 的特效。
         finishHold(n) {
             n.state = DONE;
